@@ -124,7 +124,7 @@ DB_PATH=playlist.db
 
 ```bash
 go build ./cmd/server/
-./server
+.\server.exe
 ```
 
 Open `http://localhost:8081` in your browser.
