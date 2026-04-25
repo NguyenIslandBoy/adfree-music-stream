@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Music Stream</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #111; color: #eee; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+    /* Top bar */
+    .topbar { padding: 16px 20px; border-bottom: 1px solid #222; display: flex; gap: 10px; align-items: center; flex-shrink: 0; }
+    .topbar h1 { font-size: 1.1rem; white-space: nowrap; }
+    .topbar input { flex: 1; padding: 8px 12px; font-size: 0.95rem; background: #1e1e1e; border: 1px solid #333; color: #eee; border-radius: 4px; }
+
+    /* Player bar */
+    .playerbar { padding: 10px 20px; border-bottom: 1px solid #222; flex-shrink: 0; }
+    .playerbar audio { width: 100%; }
+    .now-playing { font-size: 0.8rem; color: #888; margin-bottom: 6px; min-height: 16px; }
+
+    /* Main layout */
+    .main { display: flex; flex: 1; overflow: hidden; }
+
+    /* Panels */
+    .panel { flex: 1; overflow-y: auto; padding: 12px; border-right: 1px solid #1a1a1a; }
+    .panel:last-child { border-right: none; }
+    .panel-title { font-size: 0.75rem; text-transform: uppercase; color: #555; letter-spacing: 0.08em; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid #1e1e1e; }
+
+    /* Track cards */
+    .track { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 4px; cursor: pointer; }
+    .track:hover { background: #1a1a1a; }
+    .track.active { background: #1a1a2e; }
+    .track img { width: 52px; height: 39px; object-fit: cover; border-radius: 3px; flex-shrink: 0; }
+    .track-info { flex: 1; overflow: hidden; }
+    .track-title { font-size: 0.88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .track-meta { font-size: 0.75rem; color: #666; margin-top: 2px; }
+    .track-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .btn { background: none; border: 1px solid #333; color: #aaa; padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 0.75rem; }
+    .btn:hover { border-color: #666; color: #eee; }
+    .btn.danger:hover { border-color: #c0392b; color: #e74c3c; }
+
+    /* Playing bar*/
+    .now-playing-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .now-playing { font-size: 0.8rem; color: #888; min-height: 16px; }
+    .controls { display: flex; align-items: center; gap: 8px; }
+    .controls audio { flex: 1; }
+    .ctrl-buttons { display: flex; gap: 4px; flex-shrink: 0; }
+    .ctrl-btn { background: none; border: 1px solid #333; color: #aaa; padding: 4px 10px; border-radius: 3px; cursor: pointer; font-size: 0.8rem; white-space: nowrap; }
+    .ctrl-btn:hover { border-color: #666; color: #eee; }
+
+    .empty { font-size: 0.85rem; color: #444; padding: 20px 0; text-align: center; }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>🎵</h1>
+  <input type="text" id="query" placeholder="Search for a song..." />
+</div>
+
+<div class="playerbar">
+  <div class="now-playing-bar">
+    <div class="now-playing" id="nowPlaying">Nothing playing</div>
+    <button class="btn" id="saveCurrentBtn" style="display:none" onclick="addToPlaylist(currentTrack)">+ Save</button>
+  </div>
+  <div class="controls">
+    <audio id="player" controls></audio>
+    <div class="ctrl-buttons">
+      <button class="ctrl-btn" onclick="player.currentTime -= 10">« 10s</button>
+      <button class="ctrl-btn" onclick="player.currentTime += 10">10s »</button>
+      <button class="ctrl-btn" onclick="skipToNext()">⏭ Skip</button>
+    </div>
+  </div>
+</div>
+
+<div class="main">
+  <div class="panel" id="searchPanel">
+    <div class="panel-title">Search Results</div>
+    <div class="empty" id="searchEmpty">Search for a song above</div>
+  </div>
+  <div class="panel" id="recommendPanel">
+    <div class="panel-title">Recommendations</div>
+    <div class="empty" id="recommendEmpty">Play a song to get recommendations</div>
+  </div>
+  <div class="panel" id="playlistPanel">
+    <div class="panel-title">Playlist</div>
+    <div class="empty" id="playlistEmpty">No saved tracks</div>
+  </div>
+</div>
+
+<script>
+  const API_TOKEN = 'changeme123';
+  const HEADERS = { 'Authorization': `Bearer ${API_TOKEN}` };
+  const JSON_HEADERS = { ...HEADERS, 'Content-Type': 'application/json' };
+
+  const input = document.getElementById('query');
+  const player = document.getElementById('player');
+  const nowPlaying = document.getElementById('nowPlaying');
+  const saveCurrentBtn = document.getElementById('saveCurrentBtn');
+
+  let currentTrack = null;
+  let debounceTimer;
+  let trackStartTime = null;      // when we started this track
+  let accumulatedSeconds = 0;     // seconds listened before last pause/tab hide
+  let heartbeatTimer = null;
+
+  // ── Helpers ───────────────────────────────────────────────
+  function formatDuration(s) {
+    const m = Math.floor(s / 60);
+    return `${m}:${(s % 60).toString().padStart(2, '0')}`;
+  }
+
+  function refreshActive() {
+    document.querySelectorAll('.track').forEach(el => {
+      el.classList.toggle('active', el.dataset.id === currentTrack?.id);
+    });
+  }
+
+  function getTotalListenSeconds() {
+    const sinceLastResume = trackStartTime ? (Date.now() - trackStartTime) / 1000 : 0;
+    return accumulatedSeconds + sinceLastResume;
+  }
+
+  // ── Tracking ──────────────────────────────────────────────
+  function recordPlay(track, listenSeconds) {
+    if (!track || listenSeconds <= 0) return;
+    navigator.sendBeacon('/track/play?token=' + API_TOKEN, JSON.stringify({
+      video_id: track.id,
+      artist: track.channel,
+      title: track.title,
+      duration_seconds: track.duration,
+      listen_seconds: Math.floor(Math.min(listenSeconds, track.duration || listenSeconds)),
+      skipped: false
+    }));
+  }
+
+  function resetTrackingState() {
+    trackStartTime = null;
+    accumulatedSeconds = 0;
+  }
+
+  function startTracking() {
+    trackStartTime = Date.now();
+  }
+
+  function pauseTracking() {
+    if (trackStartTime) {
+      accumulatedSeconds += (Date.now() - trackStartTime) / 1000;
+      trackStartTime = null;
+    }
+  }
+
+  function startHeartbeat() {
+    stopHeartbeat();
+    heartbeatTimer = setInterval(() => {
+      if (currentTrack && !player.paused) {
+        // Just accumulate, don't record
+        accumulatedSeconds += (Date.now() - trackStartTime) / 1000;
+        trackStartTime = Date.now();
+      }
+    }, 30000);
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  }
+
+  // Tab visibility
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      pauseTracking();
+    } else if (!player.paused) {
+      startTracking(); // resume accumulation
+    }
+  });
+
+  // Before unload — record whatever we have
+  window.addEventListener('beforeunload', () => {
+    if (currentTrack) recordPlay(currentTrack, getTotalListenSeconds());
+  });
+
+  // ── Playback ──────────────────────────────────────────────
+  function play(track) {
+    // Record previous track
+    if (currentTrack) {
+      recordPlay(currentTrack, getTotalListenSeconds());
+    }
+
+    currentTrack = track;
+    resetTrackingState();
+
+    nowPlaying.textContent = `${track.title} — ${track.channel}`;
+    saveCurrentBtn.style.display = 'inline-block';
+
+    player.src = `/stream/${track.id}?token=${API_TOKEN}`;
+    player.play()
+      .then(() => {
+        startTracking();
+        startHeartbeat();
+      })
+      .catch(() => nowPlaying.textContent = 'Playback failed.');
+
+    refreshActive();
+    loadRecommendations(track.id);
+  }
+
+  player.addEventListener('ended', () => {
+    if (currentTrack) {
+      // Record as full listen
+      recordPlay(currentTrack, currentTrack.duration || getTotalListenSeconds());
+    }
+    resetTrackingState();
+    stopHeartbeat();
+
+    const next = getNextTrack();
+    if (next) play(next);
+  });
+
+  player.addEventListener('pause', () => {
+    pauseTracking();
+    stopHeartbeat();
+  });
+
+  player.addEventListener('play', () => {
+    startTracking();
+    startHeartbeat();
+  });
+
+  // ── Search ────────────────────────────────────────────────
+  async function search(q) {
+    if (!q.trim()) return;
+    const panel = document.getElementById('searchPanel');
+    panel.innerHTML = '<div class="panel-title">Search Results</div><div class="empty">Searching...</div>';
+    const res = await fetch(`/search?q=${encodeURIComponent(q)}&limit=10`, { headers: HEADERS });
+    const data = await res.json();
+    renderTracks('searchPanel', 'Search Results', data.results || [], { addable: true });
+  }
+
+  // ── Recommendations ───────────────────────────────────────
+  async function loadRecommendations(id) {
+    const panel = document.getElementById('recommendPanel');
+    panel.innerHTML = '<div class="panel-title">Recommendations</div><div class="empty">Loading...</div>';
+    const res = await fetch(`/recommendations/${id}`, { headers: HEADERS });
+    const data = await res.json();
+    renderTracks('recommendPanel', 'Recommendations', data.recommendations || [], { addable: true });
+  }
+
+  // ── Playlist ──────────────────────────────────────────────
+  async function loadPlaylist() {
+    const res = await fetch('/playlist', { headers: HEADERS });
+    const data = await res.json();
+    renderTracks('playlistPanel', 'Playlist', data.tracks || [], { removable: true });
+  }
+
+  async function addToPlaylist(track) {
+    await fetch('/playlist', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(track)
+    });
+    loadPlaylist();
+  }
+
+  async function removeFromPlaylist(id) {
+    await fetch(`/playlist/${id}`, { method: 'DELETE', headers: HEADERS });
+    loadPlaylist();
+  }
+
+  // ── Autoplay ──────────────────────────────────────────────
+  function getNextTrack() {
+    const recommendTracks = getTracksFromPanel('recommendPanel');
+    if (recommendTracks.length > 0) {
+      const idx = recommendTracks.findIndex(t => t.id === currentTrack?.id);
+      const next = idx === -1 ? 0 : idx + 1;
+      if (next < recommendTracks.length) return recommendTracks[next];
+    }
+    const playlistTracks = getTracksFromPanel('playlistPanel');
+    if (playlistTracks.length > 0) {
+      const idx = playlistTracks.findIndex(t => t.id === currentTrack?.id);
+      const next = idx === -1 ? 0 : idx + 1;
+      if (next < playlistTracks.length) return playlistTracks[next];
+    }
+    return null;
+  }
+  
+  function skipToNext() {
+    if (currentTrack) {
+      recordPlay(currentTrack, getTotalListenSeconds());
+    }
+    resetTrackingState();
+    stopHeartbeat();
+    const next = getNextTrack();
+    if (next) play(next);
+  }
+
+  function getTracksFromPanel(panelId) {
+    const panel = document.getElementById(panelId);
+    const tracks = [];
+    panel.querySelectorAll('.track').forEach(el => {
+      tracks.push({
+        id: el.dataset.id,
+        title: el.querySelector('.track-title').textContent,
+        channel: el.querySelector('.track-meta').textContent.split(' · ')[0],
+        duration: parseInt(el.dataset.duration || '0'),
+        thumbnail: el.querySelector('img').src
+      });
+    });
+    return tracks;
+  }
+
+  // ── Render ────────────────────────────────────────────────
+  function renderTracks(panelId, title, tracks, opts = {}) {
+    const panel = document.getElementById(panelId);
+    panel.innerHTML = `<div class="panel-title">${title}</div>`;
+    if (!tracks || tracks.length === 0) {
+      panel.innerHTML += `<div class="empty">No results</div>`;
+      return;
+    }
+    tracks.forEach(track => {
+      const div = document.createElement('div');
+      div.className = 'track';
+      div.dataset.id = track.id;
+      div.dataset.duration = track.duration; // store for getTracksFromPanel
+      if (currentTrack?.id === track.id) div.classList.add('active');
+      div.innerHTML = `
+        <img src="${track.thumbnail}" alt="" />
+        <div class="track-info">
+          <div class="track-title">${track.title}</div>
+          <div class="track-meta">${track.channel} · ${formatDuration(track.duration)}</div>
+        </div>
+        <div class="track-actions">
+          ${opts.addable ? `<button class="btn" onclick="addToPlaylist(${JSON.stringify(track).replace(/"/g, '&quot;')})">+ Save</button>` : ''}
+          ${opts.removable ? `<button class="btn danger" onclick="removeFromPlaylist('${track.id}')">✕</button>` : ''}
+        </div>
+      `;
+      div.addEventListener('click', e => {
+        if (e.target.classList.contains('btn')) return;
+        play(track);
+      });
+      panel.appendChild(div);
+    });
+  }
+
+  // ── Search input ──────────────────────────────────────────
+  input.addEventListener('input', e => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => search(e.target.value), 500);
+  });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { clearTimeout(debounceTimer); search(e.target.value); }
+  });
+
+  // Load playlist on start
+  loadPlaylist();
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+# Environment & secrets
+.env
+
+# Database
+*.db
+
+# Compiled binary
+*.exe
+server
+
+# Go build cache
+vendor/
+
+# OS
+.DS_Store
+Thumbs.db
