@@ -2,12 +2,16 @@ package ytdlp
 
 import (
 	"context"
+	"os"
 	"testing"
 )
 
 func TestExtractAudioURL(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("skipping extract test in CI — YouTube blocks cloud provider IPs")
+	}
+
 	c := NewClient(3)
-	// Using the Radiohead Creep ID from our search test
 	url, err := c.ExtractAudioURL(context.Background(), "XFkzRNyygfk")
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
