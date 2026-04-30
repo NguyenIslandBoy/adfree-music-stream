@@ -6,7 +6,7 @@
 
 # Compiled binary
 *.exe
-server
+/server
 
 # Go build cache
 vendor/
