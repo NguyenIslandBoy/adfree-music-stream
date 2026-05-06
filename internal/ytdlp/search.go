@@ -39,6 +39,8 @@ func (c *Client) Search(ctx context.Context, query string, limit int) ([]TrackMe
 		"--dump-json",
 		"--no-warnings",
 		"--no-playlist",
+		"-f", "bestaudio/best",
+		"--cookies", getEnv("YTDLP_COOKIES", "cookies.txt"),
 		fmt.Sprintf("ytsearch%d:%s", limit, query),
 	}
 

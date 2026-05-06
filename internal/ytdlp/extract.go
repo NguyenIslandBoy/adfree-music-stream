@@ -22,12 +22,19 @@ func (c *Client) ExtractAudioURL(ctx context.Context, videoID string) (string, e
 		"--no-warnings",
 		"--no-playlist",
 		"-f", "bestaudio",
+		"-f", "bestaudio/best",
+		"--cookies", getEnv("YTDLP_COOKIES", "cookies.txt"),
 		"--", videoID,
 	}
 
-	out, err := exec.CommandContext(ctx, c.binary, args...).Output()
+	cmd := exec.CommandContext(ctx, c.binary, args...)
+	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("yt-dlp extract: %w", err)
+		stderr := ""
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr = string(exitErr.Stderr)
+		}
+		return "", fmt.Errorf("yt-dlp extract: %w — stderr: %s", err, stderr)
 	}
 
 	url := strings.TrimSpace(string(out))

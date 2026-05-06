@@ -20,8 +20,13 @@ jobs:
         with:
           go-version: '1.26'
 
-      - name: Install yt-dlp
-        run: pip install yt-dlp --quiet
+      - name: Install yt-dlp with EJS support
+        run: pip install -U "yt-dlp[default]" --quiet
+
+      - name: Install Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
 
       - name: Go vet
         run: go vet ./...

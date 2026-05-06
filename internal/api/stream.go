@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -22,6 +23,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	url, err := s.ytdlp.ExtractAudioURL(r.Context(), id)
 	if err != nil {
+		log.Printf("stream error for id=%s: %v", id, err)
 		writeError(w, "failed to extract stream", http.StatusInternalServerError)
 		return
 	}
