@@ -5,6 +5,15 @@ Searches YouTube and streams audio directly from YouTube's CDN - no ads, no stor
 
 ---
 
+## Version History
+
+| Version | Changes |
+|---|---|
+| v2.0 | Added play tracking, recommendation re-ranking, skip detection, autoplay, 10s skip controls, Deno + EJS support, CI pipeline, Makefile |
+| v1.0 | Initial release - search, stream, playlist, Last.fm recommendations, Docker |
+
+---
+
 ## Features
 
 - 🔍 YouTube search via `yt-dlp`
@@ -12,8 +21,12 @@ Searches YouTube and streams audio directly from YouTube's CDN - no ads, no stor
 - 💾 Save tracks to a personal playlist (SQLite)
 - 🎯 Recommendations via Last.fm API, re-ranked by your listening behaviour
 - ⏭ Autoplay - next recommendation, then playlist fallback
+- ⏩ Skip button + 10s forward/backward controls
 - 📊 Play tracking - skip detection, listen time, per-artist signals
 - 🔒 Bearer token authentication
+- 🤖 Deno + EJS support for YouTube JS challenge solving
+- 🔄 Weekly yt-dlp auto-update via Docker cron
+- ✅ GitHub Actions CI pipeline
 - 💰 ~$0/month to run (Oracle Free Tier or any cheap VPS)
 
 ---
@@ -55,14 +68,15 @@ The Go API never touches the audio bytes. It extracts the CDN URL and returns a 
 |---|---|---|
 | Language | Go 1.26+ | Fast, single binary, low memory |
 | HTTP router | `gorilla/mux` | Simple, well-tested |
-| Audio extraction | `yt-dlp -f bestaudio` | Best audio-only extraction, no ads |
+| Audio extraction | `yt-dlp -f bestaudio/best` | Best audio-only extraction, no ads |
+| JS challenge solver | Deno + yt-dlp EJS | Required for YouTube challenge solving since March 2026 |
 | Cache | `patrickmn/go-cache` | In-memory TTL, zero infrastructure |
 | Database | `modernc.org/sqlite` | Pure Go SQLite, no C compiler needed |
-| Recommendations | Last.fm API + yt-dlp fallback | Rich music graph, works offline for niche music |
+| Recommendations | Last.fm API + yt-dlp fallback | Rich music graph, works for niche/regional music |
 | CORS | `rs/cors` | One-line setup for browser access |
 | Config | `joho/godotenv` | `.env` file support |
 | Concurrency | Semaphore (buffered channel) | Cap parallel yt-dlp processes |
-| Container | Docker + Python Alpine | yt-dlp needs Python at runtime |
+| Container | Docker + Python Alpine + Deno | yt-dlp needs Python, EJS needs Deno |
 
 ---
 
@@ -78,7 +92,7 @@ The Go API never touches the audio bytes. It extracts the CDN URL and returns a 
 | POST | `/playlist` | Save a track to playlist |
 | DELETE | `/playlist/:id` | Remove a track from playlist |
 | POST | `/track/play` | Record a play event |
-| GET | `/track/plays` | Artist signals for debugging |
+| GET | `/track/plays` | Artist signals (debug) |
 
 All endpoints except `/` require:
 - `Authorization: Bearer <token>` header, or
@@ -91,7 +105,8 @@ All endpoints except `/` require:
 ### Prerequisites
 
 - Go 1.26+
-- Python 3.x + `yt-dlp`
+- Python 3.x
+- Deno 2.0+ - [install here](https://docs.deno.com/runtime/getting_started/installation/)
 - Last.fm API key - [get one free here](https://www.last.fm/api/account/create)
 
 ### Install
@@ -100,7 +115,7 @@ All endpoints except `/` require:
 git clone https://github.com/NguyenIslandBoy/adfree-music-stream
 cd adfree-music-stream
 go mod download
-pip install yt-dlp
+pip install -U "yt-dlp[default]"
 ```
 
 ### Configure
@@ -118,13 +133,25 @@ MAX_CONCURRENT_YTDLP=3
 API_TOKEN=your_secret_token_here
 LASTFM_API_KEY=your_lastfm_key_here
 DB_PATH=playlist.db
+YTDLP_COOKIES=cookies.txt
 ```
+
+### Export YouTube cookies
+
+yt-dlp requires browser cookies to bypass YouTube's bot detection.
+
+1. Install the **"Get cookies.txt LOCALLY"** Chrome extension
+2. Go to [youtube.com](https://youtube.com) while logged in
+3. Click the extension and export cookies
+4. Save the file as `cookies.txt` in the project root
 
 ### Run
 
 ```bash
+make run
+# or
 go build ./cmd/server/
-.\server.exe
+./server
 ```
 
 Open `http://localhost:8081` in your browser.
@@ -133,6 +160,24 @@ Open `http://localhost:8081` in your browser.
 
 ```bash
 docker compose up --build
+```
+
+---
+
+## Makefile Commands
+
+```bash
+make build        # Build Go binary
+make test         # Run all tests
+make vet          # Run Go static analysis
+make check        # vet + test
+make run          # Build and run locally
+make clean        # Remove built binary
+make docker-build # Build Docker image
+make docker-up    # Start with Docker Compose
+make docker-down  # Stop Docker Compose
+make docker-logs  # Follow Docker logs
+make update-ytdlp # Update yt-dlp to latest
 ```
 
 ---
@@ -149,6 +194,7 @@ git clone https://github.com/NguyenIslandBoy/adfree-music-stream
 cd adfree-music-stream
 cp .env.example .env
 # edit .env with production values
+# copy cookies.txt to the server
 docker compose up -d
 ```
 
@@ -157,13 +203,13 @@ docker compose up -d
 The Docker image includes a weekly cron job (every Monday at 3am) to keep yt-dlp updated automatically:
 
 ```
-0 3 * * 1 pip install -U yt-dlp --quiet
+0 3 * * 1 pip install -U 'yt-dlp[default]' --quiet
 ```
 
-To update manually on your VPS:
+To update manually:
 
 ```bash
-pip install -U yt-dlp
+make update-ytdlp
 docker compose restart
 ```
 
@@ -173,6 +219,9 @@ docker compose restart
 
 ```
 adfree-music-stream/
+├── .github/
+│   └── workflows/
+│       └── ci.yml            # GitHub Actions CI pipeline
 ├── cmd/
 │   └── server/
 │       └── main.go           # Entry point, config, server bootstrap
@@ -185,7 +234,7 @@ adfree-music-stream/
 │   │   ├── stream.go         # GET /stream/:id
 │   │   ├── recommendations.go # GET /recommendations/:id
 │   │   ├── playlist.go       # GET/POST/DELETE /playlist
-│   │   ├── track.go          # POST /track/play
+│   │   ├── track.go          # POST /track/play, GET /track/plays
 │   │   └── resolve.go        # Track metadata helper
 │   ├── cache/
 │   │   └── cache.go          # In-memory TTL cache wrapper
@@ -204,7 +253,9 @@ adfree-music-stream/
 │   └── index.html            # Frontend - search, player, playlist, recommendations
 ├── Dockerfile
 ├── docker-compose.yml
+├── Makefile
 ├── .env.example
+├── .gitignore
 ├── go.mod
 └── README.md
 ```
@@ -232,7 +283,28 @@ adfree-music-stream/
                   - (artist_skip_rate  × 1.5)
 ```
 
-Play signals are collected automatically - skip detection triggers when you listen to less than 30% of a track's duration.
+Play signals are collected automatically:
+- **Skip detection** - less than 30% of track duration listened = skipped
+- **Tab switching** - time is accumulated correctly across tab switches
+- **Heartbeat** - listen time updated every 30s in background
+- **Signals decay** - only last 90 days of plays are considered
+
+---
+
+## CI/CD
+
+### CI (GitHub Actions)
+
+Runs on every push to `main`/`dev` and every pull request:
+
+- `go vet` - static analysis
+- `go test ./...` - all unit tests
+- `go build` - binary compiles
+- `docker build` - image builds
+
+### CD (coming when VPS is provisioned)
+
+Will auto-deploy to VPS on merge to `main` via SSH.
 
 ---
 
@@ -241,6 +313,8 @@ Play signals are collected automatically - skip detection triggers when you list
 | Concern | Detail |
 |---|---|
 | yt-dlp breakage | YouTube changes internals monthly - weekly auto-update handles this |
+| EJS requirement | Since March 2026, yt-dlp needs Deno to solve YouTube JS challenges |
+| Cookie auth | YouTube requires browser cookies for some videos - export `cookies.txt` |
 | CDN URL expiry | YouTube CDN URLs valid ~6h - in-memory cache with 5h TTL handles this |
 | IP rate limiting | Heavy searching may get throttled - personal use is fine |
 | YouTube ToS | Bypassing ads violates ToS - self-hosted personal use is low risk |
@@ -256,6 +330,7 @@ Play signals are collected automatically - skip detection triggers when you list
 | Hetzner CAX11 VPS | €3.29/month |
 | Last.fm API | $0 (free) |
 | yt-dlp | $0 (open source) |
+| Deno | $0 (open source) |
 | SQLite | $0 (embedded) |
 | Bandwidth | $0 (YouTube CDN serves audio) |
 
